@@ -199,15 +199,6 @@ func (m *Mutex) Unlock() {
 	if m.lastID == nil {
 		return
 	}
-	id := *m.lastID
+	m.a.Unlock(m.k, *m.lastID)
 	m.lastID = nil
-	var wg sync.WaitGroup
-	for _, a := range m.a {
-		wg.Add(1)
-		go func(a Adapter) {
-			UnlockOne(a, m.k, id)
-			wg.Done()
-		}(a)
-	}
-	wg.Wait()
 }
