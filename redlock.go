@@ -16,6 +16,31 @@ type Adapter interface {
 	Eval(script string, key []string, arg string) error
 }
 
+// LockOne locks a key with id against an adapter.
+func LockOne(a Adapter, key, id string, expiration time.Duration) (bool, error) {
+	ok, err := a.SetNX(key, id, expiration)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+const unlockScript = `
+  if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+  else
+    return 0
+  end`
+
+// UnlockOne unlocks a key with id against an adapter.
+func UnlockOne(a Adapter, key, id string) error {
+	err := a.Eval(unlockScript, []string{key}, id)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // Adapters is collection of Adapter instances.
 type Adapters []Adapter
 
@@ -55,32 +80,7 @@ func (aa Adapters) Unlock(key, id string) {
 	wg.Wait()
 }
 
-// LockOne locks a key with id against an adapter.
-func LockOne(a Adapter, key, id string, expiration time.Duration) (bool, error) {
-	ok, err := a.SetNX(key, id, expiration)
-	if err != nil {
-		return false, err
-	}
-	return ok, nil
-}
-
-const unlockScript = `
-  if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-  else
-    return 0
-  end`
-
-// UnlockOne unlocks a key with id against an adapter.
-func UnlockOne(a Adapter, key, id string) error {
-	err := a.Eval(unlockScript, []string{key}, id)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-const idLen = 24
+const idLen = 24 // 192 bits, birthday bound is 2^96.
 
 // generateID generates random lock ID.
 func generateID() (string, error) {
@@ -125,7 +125,6 @@ func New(key string, adapters ...Adapter) *Mutex {
 		a:          adapters,
 		k:          key,
 		expiration: DefaultExpiration,
-
 		retryCount: DefaultRetryCount,
 		retryDelay: DefaultRetryDelay,
 	}
@@ -149,6 +148,10 @@ func (m *Mutex) SetRetryCount(n int) {
 // SetRetryDelay modifies delay for retry to lock.
 func (m *Mutex) SetRetryDelay(d time.Duration) {
 	m.retryDelay = d
+}
+
+func (m *Mutex) randomDelay() time.Duration {
+	return time.Duration(mathrand.Int63n(int64(m.retryDelay)))
 }
 
 var (
@@ -186,10 +189,6 @@ func (m *Mutex) Lock() error {
 		m.a.Unlock(m.k, id)
 	}
 	return ErrGaveUpLock
-}
-
-func (m *Mutex) randomDelay() time.Duration {
-	return time.Duration(mathrand.Int63n(int64(m.retryDelay)))
 }
 
 // Unlock releases a lock.
