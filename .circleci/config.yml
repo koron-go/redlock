@@ -1,9 +1,20 @@
 version: 2
+
+docker-images:
+  golang: &golang
+    image: circleci/golang:latest
+  redis: &redis
+    image: redis:alpine
+
 jobs:
 
   build:
     docker:
-    - image: circleci/golang:latest
+    - <<: *golang
+      environment:
+        TEST_REDIS_URL: redis://redis:6379/0
+    - <<: *redis
+      name: redis
     working_directory: /go/src/github.com/koron-go/redlock
     steps:
     - run: go version && go env
@@ -13,9 +24,12 @@ jobs:
 
   build+module:
     docker:
-    - image: circleci/golang:latest
+    - <<: *golang
       environment:
+        TEST_REDIS_URL: redis://redis:6379/0
         GO111MODULE: 'on'
+    - <<: *redis
+      name: redis
     working_directory: /go/src/github.com/koron-go/redlock
     steps:
     - run: go version && go env
