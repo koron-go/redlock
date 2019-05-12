@@ -121,6 +121,9 @@ var (
 
 // New creates a Mutex instance.
 func New(key string, adapters ...Adapter) *Mutex {
+	if len(adapters) == 0 {
+		panic("redlock requires one or more Adapter")
+	}
 	return &Mutex{
 		a:          adapters,
 		k:          key,
