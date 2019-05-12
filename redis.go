@@ -16,8 +16,8 @@ func (ca *cmdableAdapter) SetNX(key string, val string, expiration time.Duration
 	return ca.c.SetNX(key, val, expiration).Result()
 }
 
-func (ca *cmdableAdapter) Eval(script string, key []string, arg string) error {
-	return ca.c.Eval(script, key, arg).Err()
+func (ca *cmdableAdapter) Eval(script string, key []string, args ...interface{}) error {
+	return ca.c.Eval(script, key, args...).Err()
 }
 
 // NewWithRedis creates Mutex from some "github.com/go-redis/redis".Cmdable

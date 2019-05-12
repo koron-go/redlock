@@ -13,11 +13,11 @@ import (
 // Adapter defines requirements for redis connection.
 type Adapter interface {
 	SetNX(key string, val string, expiration time.Duration) (bool, error)
-	Eval(script string, key []string, arg string) error
+	Eval(script string, key []string, args ...interface{}) error
 }
 
-// LockOne locks a key with id against an adapter.
-func LockOne(a Adapter, key, id string, expiration time.Duration) (bool, error) {
+// Lock locks a key with id against an adapter.
+func Lock(a Adapter, key, id string, expiration time.Duration) (bool, error) {
 	ok, err := a.SetNX(key, id, expiration)
 	if err != nil {
 		return false, err
@@ -32,8 +32,8 @@ const unlockScript = `
     return 0
   end`
 
-// UnlockOne unlocks a key with id against an adapter.
-func UnlockOne(a Adapter, key, id string) error {
+// Unlock unlocks a key with id against an adapter.
+func Unlock(a Adapter, key, id string) error {
 	err := a.Eval(unlockScript, []string{key}, id)
 	if err != nil {
 		return err
@@ -41,22 +41,24 @@ func UnlockOne(a Adapter, key, id string) error {
 	return nil
 }
 
-// Adapters is collection of Adapter instances.
-type Adapters []Adapter
+// adapters is collection of Adapter instances.
+type adapters []Adapter
 
-// New creates a Mutex with key.
-func (aa Adapters) New(key string) *Mutex {
-	return New(key, aa...)
-}
-
-// Lock tries to lock with all adapter.
-func (aa Adapters) Lock(key, id string, expiration time.Duration) int {
+// lock tries to lock with all adapter.
+func (aa adapters) lock(key, id string, expiration time.Duration) (int, []error) {
 	var cnt int32
 	var wg sync.WaitGroup
+	var errs []error
+	var mu sync.Mutex
 	for _, a0 := range aa {
 		wg.Add(1)
 		go func(a Adapter) {
-			ok, err := LockOne(a, key, id, expiration)
+			ok, err := Lock(a, key, id, expiration)
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
 			if err == nil && ok {
 				atomic.AddInt32(&cnt, 1)
 			}
@@ -64,16 +66,16 @@ func (aa Adapters) Lock(key, id string, expiration time.Duration) int {
 		}(a0)
 	}
 	wg.Wait()
-	return int(cnt)
+	return int(cnt), errs
 }
 
-// Unlock releases all locks
-func (aa Adapters) Unlock(key, id string) {
+// unlock releases all locks
+func (aa adapters) unlock(key, id string) {
 	var wg sync.WaitGroup
 	for _, a0 := range aa {
 		wg.Add(1)
 		go func(a Adapter) {
-			UnlockOne(a, key, id)
+			Unlock(a, key, id)
 			wg.Done()
 		}(a0)
 	}
@@ -96,7 +98,7 @@ func generateID() (string, error) {
 // See https://redis.io/topics/distlock for details.
 type Mutex struct {
 	m sync.Mutex
-	a Adapters
+	a adapters
 	k string
 
 	expiration time.Duration
@@ -183,13 +185,17 @@ func (m *Mutex) Lock() error {
 			time.Sleep(m.randomDelay())
 		}
 		st := time.Now()
-		n := m.a.Lock(m.k, id, m.expiration)
+		n, errs := m.a.lock(m.k, id, m.expiration)
 		d := time.Since(st) + d0
+		if len(errs) > 0 {
+			m.a.unlock(m.k, id)
+			return errs[0]
+		}
 		if n >= q && d < m.expiration {
 			m.lastID = &id
 			return nil
 		}
-		m.a.Unlock(m.k, id)
+		m.a.unlock(m.k, id)
 	}
 	return ErrGaveUpLock
 }
@@ -201,6 +207,6 @@ func (m *Mutex) Unlock() {
 	if m.lastID == nil {
 		return
 	}
-	m.a.Unlock(m.k, *m.lastID)
+	m.a.unlock(m.k, *m.lastID)
 	m.lastID = nil
 }
